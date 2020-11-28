@@ -25,26 +25,41 @@ const HID_REQ_SET_REPORT: u8 = 0x09;
 ///
 /// Users are expected to provide the report descriptor, as well as pack
 /// and unpack reports which are read or staged for transmission.
-pub struct HIDClass<'a, B: UsbBus> {
+pub struct HIDClass<'a, 'b, B: 'b + UsbBus> {
     if_num: InterfaceNumber,
     out_ep: EndpointOut<'a, B>,
     in_ep: EndpointIn<'a, B>,
     report_descriptor: &'static [u8],
+    in_fn: Option<&'b (dyn Sync + Fn(&ControlIn<B>))>,
+    out_fn: Option<&'b (dyn Sync + Fn(&ControlOut<B>))>,
 }
 
-impl<B: UsbBus> HIDClass<'_, B> {
+impl<'a, 'b, B: UsbBus> HIDClass<'a, 'b, B> {
     /// Creates a new HIDClass with the provided UsbBus & HID report descriptor.
     ///
     /// poll_ms configures how frequently the host should poll for reading/writing
     /// HID reports. A lower value means better throughput & latency, at the expense
     /// of CPU on the device & bandwidth on the bus. A value of 10 is reasonable for
     /// high performance uses, and a value of 255 is good for best-effort usecases.
-    pub fn new<'a>(alloc: &'a UsbBusAllocator<B>, report_descriptor: &'static [u8], poll_ms: u8) -> HIDClass<'a, B> {
-        HIDClass {
+    pub fn new(alloc: &'a UsbBusAllocator<B>, report_descriptor: &'static [u8], poll_ms: u8) -> Self {
+        Self {
             if_num: alloc.interface(),
             out_ep: alloc.interrupt(64, poll_ms),
             in_ep: alloc.interrupt(64, poll_ms),
-            report_descriptor: report_descriptor,
+            report_descriptor,
+            in_fn: None,
+            out_fn: None,
+        }
+    }
+
+    pub fn new_with_func(alloc: &'a UsbBusAllocator<B>, report_descriptor: &'static [u8], poll_ms: u8, in_fn: &'b (dyn Sync + Fn(&ControlIn<B>)), out_fn: &'b (dyn Sync + Fn(&ControlOut<B>))) -> Self {
+        Self {
+            if_num: alloc.interface(),
+            out_ep: alloc.interrupt(64, poll_ms),
+            in_ep: alloc.interrupt(64, poll_ms),
+            report_descriptor,
+            in_fn: Some(in_fn),
+            out_fn: Some(out_fn),
         }
     }
 
@@ -76,7 +91,7 @@ impl<B: UsbBus> HIDClass<'_, B> {
     }
 }
 
-impl<B: UsbBus> UsbClass<B> for HIDClass<'_, B> {
+impl<B: UsbBus> UsbClass<B> for HIDClass<'_, '_, B> {
     fn get_configuration_descriptors(&self, writer: &mut DescriptorWriter) -> Result<()> {
         writer.interface(
             self.if_num,
@@ -113,7 +128,7 @@ impl<B: UsbBus> UsbClass<B> for HIDClass<'_, B> {
         if req.index != u8::from(self.if_num) as u16 {
             return;
         }
-
+        self.in_fn.map(|f| f(&xfer));
         match (req.request_type, req.request) {
             (control::RequestType::Standard, control::Request::GET_DESCRIPTOR) => {
                 match (req.value>>8) as u8 {
@@ -160,7 +175,7 @@ impl<B: UsbBus> UsbClass<B> for HIDClass<'_, B> {
         if !(req.recipient == control::Recipient::Interface && req.index == u8::from(self.if_num) as u16) {
             return;
         }
-
+        self.out_fn.map(|f| f(&xfer));
         match req.request {
             HID_REQ_SET_IDLE => {
                 xfer.accept().ok();
