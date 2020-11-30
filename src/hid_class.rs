@@ -3,25 +3,11 @@ use usb_device::class_prelude::*;
 use usb_device::Result;
 
 use crate::descriptor::AsInputReport;
-extern crate ssmarshal;
 use ssmarshal::serialize;
 
 const USB_CLASS_HID: u8 = 0x03;
 const USB_SUBCLASS_NONE: u8 = 0x00;
 const USB_SUBCLASS_BOOT: u8 = 0x01;
-const USB_PROTOCOL_NONE: u8 = 0x00;
-
-// HID
-const HID_DESC_DESCTYPE_HID: u8 = 0x21;
-const HID_DESC_DESCTYPE_HID_REPORT: u8 = 0x22;
-const HID_DESC_SPEC_1_10: [u8; 2] = [0x10, 0x01];
-const HID_DESC_COUNTRY_UNSPEC: u8 = 0x00;
-
-const HID_REQ_SET_IDLE: u8 = 0x0a;
-const HID_REQ_GET_IDLE: u8 = 0x02;
-const HID_REQ_GET_REPORT: u8 = 0x01;
-const HID_REQ_SET_REPORT: u8 = 0x09;
-
 
 /// InterfaceProtocol describes protocols as described in section 4.3
 /// 'Functional Characteristics' of the spec, version 1.11.
@@ -33,6 +19,19 @@ pub enum InterfaceProtocol {
     Keyboard = 1,
     Mouse = 2,
 }
+
+// HID
+const HID_DESC_DESCTYPE_HID: u8 = 0x21;
+const HID_DESC_DESCTYPE_HID_REPORT: u8 = 0x22;
+const HID_DESC_SPEC_1_10: [u8; 2] = [0x10, 0x01];
+const HID_DESC_COUNTRY_UNSPEC: u8 = 0x00;
+
+const HID_REQ_GET_IDLE: u8 = 0x02;
+const HID_REQ_SET_IDLE: u8 = 0x0a;
+const HID_REQ_GET_REPORT: u8 = 0x01;
+const HID_REQ_SET_REPORT: u8 = 0x09;
+const HID_REQ_GET_PROTOCOL: u8 = 0x03;
+const HID_REQ_SET_PROTOCOL: u8 = 0x0b;
 
 /// HIDClass provides an interface to declare, read & write HID reports.
 ///
@@ -46,14 +45,14 @@ pub struct HIDClass<'a, B: UsbBus> {
     report_descriptor: &'static [u8],
 }
 
-impl<B: UsbBus> HIDClass<'_, B> {
+impl<'a, B: UsbBus> HIDClass<'a, B> {
     /// Creates a new HIDClass with the provided UsbBus & HID report descriptor.
     ///
     /// poll_ms configures how frequently the host should poll for reading/writing
     /// HID reports. A lower value means better throughput & latency, at the expense
     /// of CPU on the device & bandwidth on the bus. A value of 10 is reasonable for
-    /// high performance uses, and a value of 255 is good for best-effort usecases.
-    pub fn new<'a>(protocol: InterfaceProtocol, alloc: &'a UsbBusAllocator<B>, report_descriptor: &'static [u8], poll_ms: u8) -> Self {
+    /// high performance uses, and a value of 255 is good for best-effort use cases.
+    pub fn new(protocol: InterfaceProtocol, alloc: &'a UsbBusAllocator<B>, report_descriptor: &'static [u8], poll_ms: u8) -> Self {
         Self {
             protocol,
             if_num: alloc.interface(),
@@ -96,8 +95,9 @@ impl<B: UsbBus> UsbClass<B> for HIDClass<'_, B> {
         writer.interface(
             self.if_num,
             USB_CLASS_HID,
-            if self.protocol == InterfaceProtocol::None { USB_SUBCLASS_NONE } else { USB_SUBCLASS_BOOT },
-            self.protocol as u8)?;
+            is_boot_dev(&self.protocol),
+            self.protocol as u8,
+        )?;
 
         // HID descriptor
         writer.write(
@@ -162,8 +162,11 @@ impl<B: UsbBus> UsbClass<B> for HIDClass<'_, B> {
             },
             (control::RequestType::Class, HID_REQ_GET_IDLE) => {
                 xfer.reject().ok(); // Not supported for now
-            },
-            _ => {},
+            }
+            (control::RequestType::Class, HID_REQ_GET_PROTOCOL) => {
+                xfer.reject().ok(); // Not supported for now
+            }
+            _ => {}
         }
     }
 
@@ -183,7 +186,21 @@ impl<B: UsbBus> UsbClass<B> for HIDClass<'_, B> {
             HID_REQ_SET_REPORT => {
                 xfer.reject().ok(); // Not supported for now
             },
+            HID_REQ_SET_PROTOCOL => {
+                if is_boot_dev(&self.protocol) == 0 {
+                    xfer.reject().ok();
+                } else {
+                    xfer.accept().ok();
+                }
+            },
             _ => { xfer.reject().ok(); }
         }
+    }
+}
+
+fn is_boot_dev(protocol: &InterfaceProtocol) -> u8 {
+    match protocol {
+        InterfaceProtocol::None => USB_SUBCLASS_NONE,
+        _ => USB_SUBCLASS_BOOT,
     }
 }
