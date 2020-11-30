@@ -8,6 +8,7 @@ use ssmarshal::serialize;
 
 const USB_CLASS_HID: u8 = 0x03;
 const USB_SUBCLASS_NONE: u8 = 0x00;
+const USB_SUBCLASS_BOOT: u8 = 0x01;
 const USB_PROTOCOL_NONE: u8 = 0x00;
 
 // HID
@@ -21,11 +22,24 @@ const HID_REQ_GET_IDLE: u8 = 0x02;
 const HID_REQ_GET_REPORT: u8 = 0x01;
 const HID_REQ_SET_REPORT: u8 = 0x09;
 
+
+/// InterfaceProtocol describes protocols as described in section 4.3
+/// 'Functional Characteristics' of the spec, version 1.11.
+#[repr(u8)]
+#[allow(unused)]
+#[derive(Copy, Debug, Clone, Eq, PartialEq)]
+pub enum InterfaceProtocol {
+    None = 0,
+    Keyboard = 1,
+    Mouse = 2,
+}
+
 /// HIDClass provides an interface to declare, read & write HID reports.
 ///
 /// Users are expected to provide the report descriptor, as well as pack
 /// and unpack reports which are read or staged for transmission.
 pub struct HIDClass<'a, B: UsbBus> {
+    protocol: InterfaceProtocol,
     if_num: InterfaceNumber,
     out_ep: EndpointOut<'a, B>,
     in_ep: EndpointIn<'a, B>,
@@ -39,12 +53,13 @@ impl<B: UsbBus> HIDClass<'_, B> {
     /// HID reports. A lower value means better throughput & latency, at the expense
     /// of CPU on the device & bandwidth on the bus. A value of 10 is reasonable for
     /// high performance uses, and a value of 255 is good for best-effort usecases.
-    pub fn new<'a>(alloc: &'a UsbBusAllocator<B>, report_descriptor: &'static [u8], poll_ms: u8) -> HIDClass<'a, B> {
-        HIDClass {
+    pub fn new<'a>(protocol: InterfaceProtocol, alloc: &'a UsbBusAllocator<B>, report_descriptor: &'static [u8], poll_ms: u8) -> Self {
+        Self {
+            protocol,
             if_num: alloc.interface(),
             out_ep: alloc.interrupt(64, poll_ms),
             in_ep: alloc.interrupt(64, poll_ms),
-            report_descriptor: report_descriptor,
+            report_descriptor,
         }
     }
 
@@ -81,8 +96,8 @@ impl<B: UsbBus> UsbClass<B> for HIDClass<'_, B> {
         writer.interface(
             self.if_num,
             USB_CLASS_HID,
-            USB_SUBCLASS_NONE,
-            USB_PROTOCOL_NONE)?;
+            if self.protocol == InterfaceProtocol::None { USB_SUBCLASS_NONE } else { USB_SUBCLASS_BOOT },
+            self.protocol as u8)?;
 
         // HID descriptor
         writer.write(
