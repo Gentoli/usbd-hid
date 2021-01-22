@@ -3,7 +3,7 @@ extern crate usbd_hid_descriptors;
 use quote::quote;
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
-use syn::{parse, Expr, ExprAssign, ExprPath, Path, Result, Token};
+use syn::{parse, Expr, ExprAssign, ExprPath, Path, Result, Token, ExprParen};
 use syn::{Block, ExprBlock, ExprLit, ExprTuple, Lit, Stmt};
 
 use std::collections::HashMap;
@@ -219,54 +219,62 @@ pub fn try_resolve_constant(key_name: &str, path: String) -> Option<u32> {
 }
 
 fn parse_group_spec(input: ParseStream, field: &Expr) -> Result<GroupSpec> {
-    let mut collection_attrs: Vec<(String, u32)> = vec![];
+    let collection_attrs = [field].into_iter()
+        .filter_map(|f|
+            match f {
+                Expr::Assign(ExprAssign { left, .. }) => Some(left),
+                _ => None
+            }
+        ).flat_map(|l|
+            match l.as_ref() {
+                Expr::Tuple(ExprTuple { elems, .. }) => elems.into_iter().collect::<Vec<_>>(),
+                Expr::Paren(ExprParen{ expr, .. }) => vec![expr.as_ref()],
+                _ => vec![],
+            }
+        ).map(|elem| {
+            let group_attr = maybe_parse_kv_lhs(elem);
+            if group_attr.as_ref().map_or(true, |g| g.len() != 1) {
+                return Err(parse::Error::new(
+                    input.span(),
+                    "`#[gen_hid_descriptor]` group spec key can only have a single element",
+                ));
+            }
+            let group_attr = &group_attr.unwrap()[0];
 
-    if let Expr::Assign(ExprAssign { left, .. }) = field {
-        if let Expr::Tuple(ExprTuple { elems, .. }) = left.as_ref() {
-            for elem in elems {
-                let group_attr = maybe_parse_kv_lhs(&elem);
-                if group_attr.as_ref().map_or(true, |g| g.len() != 1) {
-                    return Err(parse::Error::new(
-                        input.span(),
-                        "`#[gen_hid_descriptor]` group spec key can only have a single element",
-                    ));
-                }
-                let group_attr = &group_attr.unwrap()[0];
-
-                let mut val: Option<u32> = None;
-                if let Expr::Assign(ExprAssign { right, .. }) = elem {
-                    if let Expr::Lit(ExprLit { lit, .. }) = right.as_ref() {
-                        if let Lit::Int(lit) = lit {
-                            if let Ok(num) = lit.base10_parse::<u32>() {
-                                val = Some(num);
-                            }
+            let mut val: Option<u32> = None;
+            if let Expr::Assign(ExprAssign { right, .. }) = elem {
+                if let Expr::Lit(ExprLit { lit, .. }) = right.as_ref() {
+                    if let Lit::Int(lit) = lit {
+                        if let Ok(num) = lit.base10_parse::<u32>() {
+                            val = Some(num);
                         }
-                    } else if let Expr::Path(ExprPath {
+                    }
+                } else if let Expr::Path(ExprPath {
                         path: Path { segments, .. },
                         ..
                     }) = right.as_ref() {
-                        val = try_resolve_constant(
-                            group_attr.as_str(),
-                            quote! { #segments }.to_string(),
-                        );
-                        if val.is_none() {
-                            return Err(parse::Error::new(
-                                input.span(),
-                                format!(
-                                    "`#[gen_hid_descriptor]` unrecognized constant: {}",
-                                    quote! { #segments }.to_string()
-                                ),
-                            ));
-                        }
+                    val = try_resolve_constant(
+                        group_attr.as_str(),
+                        quote! { #segments }.to_string(),
+                    );
+                    if val.is_none() {
+                        return Err(parse::Error::new(
+                            input.span(),
+                            format!(
+                                "`#[gen_hid_descriptor]` unrecognized constant: {}",
+                                quote! { #segments }.to_string()
+                            ),
+                        ));
                     }
                 }
-                if val.is_none() {
-                    return Err(parse::Error::new(input.span(), "`#[gen_hid_descriptor]` group spec attribute value must be a numeric literal or recognized constant"));
-                }
-                collection_attrs.push((group_attr.clone(), val.unwrap()));
             }
+            if val.is_none() {
+                return Err(parse::Error::new(input.span(), "`#[gen_hid_descriptor]` group spec attribute value must be a numeric literal or recognized constant"));
+            }
+            Ok((group_attr.clone(), val.unwrap()))
         }
-    }
+    ).collect::<Result<Vec<_>>>()?;
+
     if collection_attrs.len() == 0 {
         return Err(parse::Error::new(
             input.span(),

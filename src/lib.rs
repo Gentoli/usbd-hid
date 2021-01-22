@@ -88,10 +88,10 @@ mod tests {
     }
 
     #[gen_hid_descriptor(
-        (report_id = 0x01,) = {
+        (report_id = 0x01) = {
             f1=input
         },
-        (report_id = 0x02,) = {
+        (report_id = 0x02) = {
             f2=input
         },
     )]
@@ -178,7 +178,7 @@ mod tests {
     // 0x95, 0x04,        // Report Count (4)
     // 0x81, 0x03,        // Input (Const,Var,Abs,No Wrap,Linear,Preferred State,No Null Position)
     #[gen_hid_descriptor(
-        (report_id = 0x01,) = {
+        (report_id = 0x01) = {
             #[packed_bits 3] f1=input;
             #[packed_bits 9] f2=input;
             #[packed_bits 20] f3=input;
@@ -256,11 +256,11 @@ mod tests {
     }
 
     #[gen_hid_descriptor(
-        (report_id = 0x01,) = {
+        (report_id = 0x01) = {
             #[packed_bits 3] f1=input;
             #[packed_bits 20] f3=input;
         },
-        (report_id = 0xff,) = {
+        (report_id = 0xff) = {
             #[packed_bits 9] f2=output;
         }
     )]
